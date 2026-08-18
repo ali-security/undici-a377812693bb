@@ -80,7 +80,21 @@ const BASE_TEST_ENVIRONMENT = {
     'head-200-retain',
     'head-410-update',
     'stale-close-must-revalidate',
-    'stale-close-no-cache'
+    'stale-close-no-cache',
+
+    // Flaky wall-clock race, excluded by Seal. This case stores a response with
+    // `Cache-Control: max-age, must-revalidate`, waits for it to go stale, and
+    // asserts request 3 is conditional. Freshness is computed from the `Date`
+    // header, which has one-second resolution, so on a loaded runner the third
+    // request can land inside the same second the entry was stored and the
+    // entry is still judged fresh -- "Request 3 should have been conditional,
+    // but it was not." Measured over two full 15-leg CI runs of the unmodified
+    // tree: it failed on Node 25/ubuntu (WASM SIMD disabled) in the first run
+    // and on Node 22/macOS + Node 22/windows in the second, passing everywhere
+    // else and in the other three cache environments of the very same job --
+    // a different, non-overlapping set each time. The remaining 282 conformance
+    // cases still run in all four cache environments on every leg.
+    'cc-resp-must-revalidate-stale'
   ]
 }
 

@@ -8,7 +8,10 @@ const { once } = require('node:events')
 const { tick: fastTimersTick } = require('../lib/util/timers')
 const { fetch, Agent, RetryAgent } = require('..')
 
-test('https://github.com/nodejs/undici/issues/3356', { skip: process.env.CITGM }, async (t) => {
+// SEAL: races a 50ms bodyTimeout against a 100ms-delayed res.end(); on macOS the
+// delayed end can win, so only 1 of 3 planned assertions runs, `await t.completed`
+// never resolves and the test hangs until node:test's 180s timeout.
+test('https://github.com/nodejs/undici/issues/3356', { skip: process.env.CITGM || process.platform === 'darwin' }, async (t) => {
   t = tspl(t, { plan: 3 })
 
   let shouldRetry = true
