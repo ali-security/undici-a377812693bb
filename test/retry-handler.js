@@ -531,7 +531,7 @@ test('Should handle 206 partial content', async t => {
       }, 1e2)
     } else if (x === 1) {
       t.deepStrictEqual(req.headers.range, 'bytes=3-')
-      res.setHeader('content-range', 'bytes 3-6/6')
+      res.setHeader('content-range', 'bytes 3-5/6')
       res.setHeader('etag', 'asd')
       res.statusCode = 206
       res.end('def')
@@ -627,7 +627,7 @@ test('Should handle 206 partial content - bad-etag', async t => {
       }, 1e2)
     } else if (x === 1) {
       t.deepStrictEqual(req.headers.range, 'bytes=3-')
-      res.setHeader('content-range', 'bytes 3-6/6')
+      res.setHeader('content-range', 'bytes 3-5/6')
       res.setHeader('etag', 'erwsd')
       res.statusCode = 206
       res.end('def')
@@ -1072,7 +1072,7 @@ test('Issue#2986 - Handle custom 206', async t => {
       }, 1e2)
     } else if (x === 1) {
       t.deepStrictEqual(req.headers.range, 'bytes=3-')
-      res.setHeader('content-range', 'bytes 3-6/6')
+      res.setHeader('content-range', 'bytes 3-5/6')
       res.setHeader('etag', 'asd')
       res.statusCode = 206
       res.end('def')
@@ -1172,7 +1172,7 @@ test('Issue#3128 - Support if-match', async t => {
       t.deepStrictEqual(req.headers.range, 'bytes=3-')
       t.deepStrictEqual(req.headers['if-match'], 'asd')
 
-      res.setHeader('content-range', 'bytes 3-6/6')
+      res.setHeader('content-range', 'bytes 3-5/6')
       res.setHeader('etag', 'asd')
       res.statusCode = 206
       res.end('def')
@@ -1272,7 +1272,7 @@ test('Issue#3128 - Should ignore weak etags', async t => {
       t.deepStrictEqual(req.headers.range, 'bytes=3-')
       t.equal(req.headers['if-match'], undefined)
 
-      res.setHeader('content-range', 'bytes 3-6/6')
+      res.setHeader('content-range', 'bytes 3-5/6')
       res.setHeader('etag', 'W/asd')
       res.statusCode = 206
       res.end('def')
@@ -1372,7 +1372,7 @@ test('Weak etags are ignored on range-requests', async t => {
       t.deepStrictEqual(req.headers.range, 'bytes=3-')
       t.equal(req.headers['if-match'], undefined)
 
-      res.setHeader('content-range', 'bytes 3-6/6')
+      res.setHeader('content-range', 'bytes 3-5/6')
       res.setHeader('etag', 'W/efg')
       res.statusCode = 206
       res.end('def')
@@ -1521,6 +1521,105 @@ test('Should throw RequestRetryError when Content-Range mismatch', async t => {
           t.strictEqual(Buffer.concat(chunks).toString('utf-8'), 'abc')
           t.strictEqual(err.code, 'UND_ERR_REQ_RETRY')
           t.strictEqual(err.message, 'Content-Range mismatch')
+          t.deepEqual(err.data, { count: 2 })
+        }
+      }
+    })
+
+    client.dispatch(
+      {
+        method: 'GET',
+        path: '/',
+        headers: {
+          'content-type': 'application/json'
+        }
+      },
+      handler
+    )
+
+    after(async () => {
+      await client.close()
+
+      server.close()
+      await once(server, 'close')
+    })
+  })
+
+  await t.completed
+})
+
+test('Should throw RequestRetryError when Content-Length mismatch on resumed 206', async t => {
+  t = tspl(t, { plan: 8 })
+
+  const chunks = []
+
+  let x = 0
+  const server = createServer({ joinDuplicateHeaders: true }, (req, res) => {
+    if (x === 0) {
+      t.ok(true, 'pass')
+      res.setHeader('etag', 'asd')
+      res.write('abc')
+      setTimeout(() => {
+        res.destroy()
+      }, 1e2)
+    } else if (x === 1) {
+      t.deepStrictEqual(req.headers.range, 'bytes=3-')
+      // The content-range advertises the 3 remaining bytes, but the framing
+      // announces 6, smuggling 'ghi' past the end of the requested range.
+      res.setHeader('content-range', 'bytes 3-5/6')
+      res.setHeader('content-length', '6')
+      res.setHeader('etag', 'asd')
+      res.statusCode = 206
+      res.end('defghi')
+    }
+    x++
+  })
+
+  const dispatchOptions = {
+    retryOptions: {
+      retry: function (err, _, done) {
+        if (err.code && err.code === 'UND_ERR_DESTROYED') {
+          return done(false)
+        }
+
+        if (err.statusCode === 206) return done(err)
+
+        setTimeout(done, 800)
+      }
+    },
+    method: 'GET',
+    path: '/',
+    headers: {
+      'content-type': 'application/json'
+    }
+  }
+
+  server.listen(0, () => {
+    const client = new Client(`http://localhost:${server.address().port}`)
+    const handler = new RetryHandler(dispatchOptions, {
+      dispatch: (...args) => {
+        return client.dispatch(...args)
+      },
+      handler: {
+        onConnect () {
+          t.ok(true, 'pass')
+        },
+        onHeaders (status, _rawHeaders, _resume, _statusMessage) {
+          t.strictEqual(status, 200)
+          return true
+        },
+        onData (chunk) {
+          chunks.push(chunk)
+          return true
+        },
+        onComplete () {
+          t.ifError('should not complete')
+        },
+        onError (err) {
+          // No byte beyond the requested range reaches the caller
+          t.strictEqual(Buffer.concat(chunks).toString('utf-8'), 'abc')
+          t.strictEqual(err.code, 'UND_ERR_REQ_RETRY')
+          t.strictEqual(err.message, 'Content-Length mismatch')
           t.deepEqual(err.data, { count: 2 })
         }
       }
